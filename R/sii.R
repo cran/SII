@@ -54,7 +54,7 @@ sii <- function(
                       "equal-contributing"="equal",
                       "octave"="octave"
                       )
-  data(list=data.name, package="SII")
+  data(list=data.name, package="SII", envir=environment())
   table <- get(data.name)
 
   ## Get the correct importance functions
@@ -64,7 +64,7 @@ sii <- function(
       if(importance!="SII")
         {
           sic.name <- paste("sic.",data.name, sep="")
-          data(list=sic.name, package="SII")
+          data(list=sic.name, package="SII", envir=environment())
           sic.table <- get(sic.name)
           table[,"Ii"] <- sic.table[[importance]]
         }
