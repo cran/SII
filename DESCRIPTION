@@ -1,7 +1,7 @@
 Package: SII
 Type: Package
 Title: Calculate ANSI S3.5-1997 Speech Intelligibility Index
-Version: 1.0.3
+Version: 1.0.3.1
 Date: 2013-12-06
 Author: Gregory R. Warnes
 Maintainer: Gregory R. Warnes <greg@warnes.net>
@@ -25,7 +25,7 @@ Depends:
 Suggests: splines, gdata, xtable
 License: GPL-2
 LazyLoad: yes
-Packaged: 2013-12-10 13:44:01 UTC; warnes
+Packaged: 2018-11-18 09:53:18 UTC; hornik
 NeedsCompilation: no
 Repository: CRAN
-Date/Publication: 2013-12-10 15:32:58
+Date/Publication: 2018-11-18 09:56:48 UTC
