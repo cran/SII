@@ -119,8 +119,8 @@ sii.C1$sii
 ###################################################
 ### code chunk number 9: LoadData (eval = FALSE)
 ###################################################
-## library(gdata)
-## patInfo <- read.xls("../AI subject list.xls")
+## library(readxl)
+## patInfo <- read_excel("../AI subject list.xls")
 
 
 ###################################################
@@ -217,8 +217,8 @@ sii.C1$sii
 ##     if(verbose)
 ##       cat("\nLoading data file '", infile, "'...\n", sep="")
 ##     ## Load the data
-##     library(gdata)
-##     patInfo <- read.xls(infile)
+##     library(readxl)
+##     patInfo <- read_excel(infile)
 ##     
 ##     ## measured frequencies
 ##     freq <- c(250, 500, 1000, 2000, 3000, 4000, 6000, 8000)
@@ -328,7 +328,7 @@ sii.C1$sii
 
 
 ###################################################
-### code chunk number 22: SII.Rnw:439-480
+### code chunk number 22: SII.Rnw:438-479
 ###################################################
 latexhelp <- function(topics, package=NULL)
   {
@@ -511,19 +511,7 @@ args(sii)
 
 
 ###################################################
-### code chunk number 33: show.reload.constants
-###################################################
-SII:::reload.constants 
-
-
-###################################################
-### code chunk number 34: run.reload.constants (eval = FALSE)
-###################################################
-## SII:::reload.constants(xls.path="./SII/extdata")
-
-
-###################################################
-### code chunk number 35: ComparisonTable1
+### code chunk number 33: ComparisonTable1
 ###################################################
 sii.left <- sii(
                 speech="raised",
@@ -546,7 +534,7 @@ t(round(tab,2))
 
 
 ###################################################
-### code chunk number 36: <plot.sii
+### code chunk number 34: <plot.sii
 ###################################################
 compare.plot <- function(x, matlab, title)
   {
@@ -572,7 +560,7 @@ compare.plot <- function(x, matlab, title)
 
 
 ###################################################
-### code chunk number 37: ComparisonFigure1
+### code chunk number 35: ComparisonFigure1
 ###################################################
 
 compare.plot(sii.left, matlab=SII:::sii.constants[, "Ti'.THDN"], title="Spline method comparison, Left Ear")
@@ -580,7 +568,7 @@ compare.plot(sii.left, matlab=SII:::sii.constants[, "Ti'.THDN"], title="Spline m
 
 
 ###################################################
-### code chunk number 38: ComparisonTable2
+### code chunk number 36: ComparisonTable2
 ###################################################
 # comparison of our interpolation and matlab's
 
@@ -607,13 +595,13 @@ t(round(tab,2))
 
 
 ###################################################
-### code chunk number 39: ComparisonFigure2
+### code chunk number 37: ComparisonFigure2
 ###################################################
 compare.plot(sii.right, matlab=matlab, title="Spline method comparison, Right Ear")
 
 
 ###################################################
-### code chunk number 40: <sii.left.old
+### code chunk number 38: <sii.left.old
 ###################################################
 SII:::sii.excel( 
           c(25,25,30,35,45,45,55,60),
@@ -622,7 +610,7 @@ SII:::sii.excel(
 
 
 ###################################################
-### code chunk number 41: sii.left
+### code chunk number 39: sii.left
 ###################################################
 sii.left <- sii(
                 speech="raised",
@@ -635,7 +623,7 @@ sii.left
 
 
 ###################################################
-### code chunk number 42: <sii.right.old
+### code chunk number 40: <sii.right.old
 ###################################################
 SII:::sii.excel( 
           c(15,15,20,25,35,35,45,50), 
@@ -644,7 +632,7 @@ SII:::sii.excel(
 
 
 ###################################################
-### code chunk number 43: sii.right
+### code chunk number 41: sii.right
 ###################################################
 sii.right <- sii( 
                  speech="raised",
@@ -657,7 +645,7 @@ sii.right
 
 
 ###################################################
-### code chunk number 44: <sii.best.old
+### code chunk number 42: <sii.best.old
 ###################################################
 SII:::sii.excel( 
           rep(0,8),
@@ -666,7 +654,7 @@ SII:::sii.excel(
 
 
 ###################################################
-### code chunk number 45: sii.best
+### code chunk number 43: sii.best
 ###################################################
 sii.best <- sii( 
                 threshold=rep(0,8),
@@ -677,7 +665,7 @@ sii.best
 
 
 ###################################################
-### code chunk number 46: <sii.worst.old
+### code chunk number 44: <sii.worst.old
 ###################################################
 SII:::sii.excel( 
           rep(100,8),
@@ -686,7 +674,7 @@ SII:::sii.excel(
 
 
 ###################################################
-### code chunk number 47: sii.worst
+### code chunk number 45: sii.worst
 ###################################################
 sii.worst <- sii( 
                  threshold=rep(100,8),
@@ -697,7 +685,7 @@ sii.worst
 
 
 ###################################################
-### code chunk number 48: sii.missing
+### code chunk number 46: sii.missing
 ###################################################
 sii.worst <- sii( 
                  threshold=c(NA, rep(100,7)),
@@ -708,7 +696,7 @@ sii.worst
 
 
 ###################################################
-### code chunk number 49: sii.missing
+### code chunk number 47: sii.missing
 ###################################################
 sii.right <- sii( 
                  speech="raised",
@@ -721,7 +709,7 @@ sii.right
 
 
 ###################################################
-### code chunk number 50: sii.all.missing
+### code chunk number 48: sii.all.missing
 ###################################################
 ## This should fail, because there is no data!
 sii.NONE <- try(
@@ -735,7 +723,7 @@ sii.NONE
 
 
 ###################################################
-### code chunk number 51: sii.missing
+### code chunk number 49: sii.missing
 ###################################################
 sii.right <- sii( 
                  speech="raised",
@@ -748,7 +736,7 @@ sii.right
 
 
 ###################################################
-### code chunk number 52: missing.C.1
+### code chunk number 50: missing.C.1
 ###################################################
 sii.C1.NA <- sii(
               speech   = c(50.0, 40.0, 40.0, NA,   20.0,  0.0),
@@ -764,7 +752,7 @@ sii.C1.NA
 
 
 ###################################################
-### code chunk number 53: save data
+### code chunk number 51: save data
 ###################################################
 save.image("SII-Code.Rda")
 

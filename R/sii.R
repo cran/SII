@@ -1,3 +1,6 @@
+# utils::globalVariables(c("critical", "octave", "onethird", "equal", 
+#                          "sic.critical", "sic.octave", "sic.onethird", "sic.equal"))
+
 sii <- function(
                 speech=c("normal","raised","loud","shout"),
                 noise,
@@ -20,9 +23,34 @@ sii <- function(
                   "SPIN",
                   "CST"
                   ),
-                interpolate=FALSE
+                interpolate=FALSE,
+                prescription=NULL,
+                desensitization=FALSE,
+                ldl=NULL,
+                gender="male",
+                experience="experienced",
+                config="bilateral",
+                coupling="custom_occluded",
+                module="standard",
+                transducer="inserts",
+                custom_gain=NULL,
+                measured_wrs=NULL,
+                wrs_level=NULL,
+                distortion_category=NULL,
+
+                nal_ldf=FALSE,
+                ...
                 )
 {
+  # Map backwards-compatible boolean to new string identifier
+  if (is.logical(desensitization)) {
+    if (desensitization) {
+      desensitization <- "johnson2011_complete"
+    } else {
+      desensitization <- "none"
+    }
+  }
+
   ## Assumptions:
   ##
   ## freq: If provided, frequencies in Hz at which speech, noise, and/or
@@ -36,7 +64,7 @@ sii <- function(
   ##    in dB will be applied.
   ##
   ## noise: Noise dB at each frequency, defaults to -50 dB at each
-  ##   frequency (as required by ANSI S3.5-1997 section 4.2)
+  ##   frequency (as required by ANSI/ASA S3.5-1997 (R2024) section 4.2)
   ##
   ## threshold: Hearing threshold level in dB at each frequency. If
   ##   missing, assumed to be 0.
@@ -54,8 +82,14 @@ sii <- function(
                       "equal-contributing"="equal",
                       "octave"="octave"
                       )
-  data(list=data.name, package="SII", envir=environment())
-  table <- get(data.name)
+  if (!exists(data.name, envir = environment())) {
+    if (file.exists(file.path("data", paste0(data.name, ".rda")))) {
+      load(file.path("data", paste0(data.name, ".rda")), envir=environment())
+    } else {
+      data(list=data.name, package="SII", envir=environment())
+    }
+  }
+  table <- get(data.name, envir=environment())
 
   ## Get the correct importance functions
   if(missing(importance) || is.character(importance) )
@@ -64,8 +98,14 @@ sii <- function(
       if(importance!="SII")
         {
           sic.name <- paste("sic.",data.name, sep="")
-          data(list=sic.name, package="SII", envir=environment())
-          sic.table <- get(sic.name)
+          if (!exists(sic.name, envir = environment())) {
+            if (file.exists(file.path("data", paste0(sic.name, ".rda")))) {
+              load(file.path("data", paste0(sic.name, ".rda")), envir=environment())
+            } else {
+              data(list=sic.name, package="SII", envir=environment())
+            }
+          }
+          sic.table <- get(sic.name, envir=environment())
           table[,"Ii"] <- sic.table[[importance]]
         }
     }
@@ -88,10 +128,19 @@ sii <- function(
     {
       const.speech=TRUE
       speech <- match.arg(speech)
+      vocal_effort <- speech
       speech <- table[[speech]]
     }
-  else
+  else {
     const.speech=FALSE
+    # Calculate the overall broadband SPL for the custom speech array
+    if ("hi" %in% names(table) && "li" %in% names(table) && length(speech) == length(table$hi)) {
+      overall_spl <- 10 * log10(sum((10^(speech/10)) * (table$hi - table$li), na.rm = TRUE))
+    } else {
+      overall_spl <- 10 * log10(sum(10^(speech/10), na.rm = TRUE))
+    }
+    vocal_effort <- paste0(round(overall_spl), " dB SPL")
+  }
 
   ## Handle missing noise
   if(missing(noise))
@@ -138,6 +187,12 @@ sii <- function(
   retval <- list()
   retval$call <- match.call()
   retval$orig <- list( freq, speech, noise, threshold, loss )
+  retval$experience <- experience
+  retval$gender <- gender
+  retval$config <- config
+  retval$coupling <- coupling
+  retval$module <- module
+  retval$transducer <- transducer
 
   
   if(interpolate)
@@ -155,6 +210,14 @@ sii <- function(
               obs.freq <- obs.freq[!nas]
             }
           
+          if(length(value) < 2)
+            {
+              if (length(value) == 1)
+                return(rep(value, length(target.freq)))
+              else
+                return(rep(NA, length(target.freq)))
+            }
+            
           tmp <- approx(
                         x=log10(obs.freq),
                         y=value,
@@ -178,7 +241,161 @@ sii <- function(
     }
       
   #########
-  ## Calcuate SII following ANSI S3.5-1997 Section 4
+  ## Predict WRS and Determine Distortion Category (Margolis et al., 2025)
+  #########
+  predicted_wrs <- NULL
+  
+  if (!is.null(measured_wrs) && !is.null(wrs_level) && is.null(distortion_category)) {
+
+
+    # Estimate speech spectrum at wrs_level
+    if ("hi" %in% names(table) && "li" %in% names(table)) {
+      overall_normal <- 10 * log10(sum((10^(table$normal / 10)) * (table$hi - table$li), na.rm = TRUE))
+    } else {
+      overall_normal <- 62.35
+    }
+    wrs_speech <- table$normal + (wrs_level - overall_normal)
+    
+    # Recursive call for unaided SII at wrs_level
+    wrs_sii_obj <- sii(speech = wrs_speech, noise = rep(-50, length(freq)), threshold = threshold, loss = loss, freq = freq, method = method, importance = importance, interpolate = FALSE, desensitization = FALSE)
+    
+    # Predicted WRS using standard NU-6 transfer function (Studebaker)
+    predicted_wrs <- 100 * (1 - 10^(-(wrs_sii_obj$sii * 3.28)))
+    
+    diff_pct <- measured_wrs - predicted_wrs
+    
+    # Margolis (2025) UM Ranges (Normal: > -2.7, Low: -2.8 to -13.5, Moderate: -13.6 to -24.3, High: < -24.3)
+    if (diff_pct > -2.7) {
+      distortion_category <- "Normal"
+    } else if (diff_pct >= -13.5) {
+      distortion_category <- "Low"
+    } else if (diff_pct >= -24.3) {
+      distortion_category <- "Moderate"
+    } else {
+      distortion_category <- "High"
+    }
+  }
+
+  #########
+  ## Calculate Prescription Gain if requested
+  #########
+  mpo <- NULL
+  if (!is.null(custom_gain)) {
+    # If custom gain is provided, ensure it matches the sii calculation frequencies by interpolation
+    if (length(custom_gain) == length(freq)) {
+      gain <- custom_gain
+    } else if (length(custom_gain) == length(retval$orig[[1]])) {
+      # Interpolate from original freq to interpolated freq
+      nas <- is.na(custom_gain)
+      if(any(nas)) {
+        custom_gain <- custom_gain[!nas]
+        orig_f <- retval$orig[[1]][!nas]
+      } else {
+        orig_f <- retval$orig[[1]]
+      }
+      gain <- approx(x=log10(orig_f), y=custom_gain, xout=log10(freq), method="linear", rule=2)$y
+    } else {
+      stop("custom_gain must match the length of the frequencies used in the method or the original frequencies.")
+    }
+    # For custom gain benchmarking, we bypass the MPO calculation to test the exact target gain limits
+  } else if (!is.null(prescription) && inherits(prescription, "prescription_target")) {
+    # If the user supplied a pre-calculated prescription_target S3 object
+    
+    # Interpolate gain to sii evaluation frequencies
+    if (length(prescription$gain) == length(freq) && all(prescription$freq == freq)) {
+       gain_65 <- prescription$gain
+       mpo <- if (!is.null(prescription$mpo)) prescription$mpo else rep(120, length(freq))
+    } else {
+       # Use cubic spline for smoother frequency response targets instead of jagged linear interpolation
+       # but cap the extrapolation to prevent the natural spline from artificially inflating gain below 250Hz
+       spl_gain <- spline(x = log10(prescription$freq), y = prescription$gain, xout = log10(freq), method = "natural")$y
+       flat_gain <- approx(x = log10(prescription$freq), y = prescription$gain, xout = log10(freq), rule = 2)$y
+       gain_65 <- pmax(0, ifelse(freq < min(prescription$freq) | freq > max(prescription$freq), flat_gain, spl_gain))
+       
+       if (!is.null(prescription$mpo)) {
+         spl_mpo <- spline(x = log10(prescription$freq), y = prescription$mpo, xout = log10(freq), method = "natural")$y
+         flat_mpo <- approx(x = log10(prescription$freq), y = prescription$mpo, xout = log10(freq), rule = 2)$y
+         mpo <- pmax(0, ifelse(freq < min(prescription$freq) | freq > max(prescription$freq), flat_mpo, spl_mpo))
+       } else {
+         mpo <- rep(120, length(freq))
+       }
+    }
+    
+    # WDRC: Derive compression ratios per Section H of the manuscript
+    # The prescription_target stores the optimized 65 dB SPL anchor gain.
+    # For other input levels, apply dynamic compression ratios.
+    p_loss <- if (!is.null(prescription$loss)) prescription$loss else rep(0, length(prescription$freq))
+    p_threshold <- if (!is.null(prescription$threshold)) prescription$threshold else threshold
+    
+    # Interpolate SN thresholds to evaluation frequencies
+    if (length(p_threshold) == length(prescription$freq)) {
+      htl_sn_interp <- approx(x = log10(prescription$freq), y = p_threshold, xout = log10(freq), rule = 2)$y
+      loss_interp <- approx(x = log10(prescription$freq), y = p_loss, xout = log10(freq), rule = 2)$y
+    } else {
+      htl_sn_interp <- threshold
+      loss_interp <- if (!is.null(loss)) loss else rep(0, length(freq))
+    }
+    htl_sn <- pmax(0, htl_sn_interp - loss_interp)
+    
+    # CR_base = 1 + max(0, HTL_sn - 20) / 40  (Eq. from Section H)
+    cr_base <- 1 + pmax(0, htl_sn - 20) / 40
+    
+    # F_mod = max(0, min(1, (f - 500) / 2500))  (frequency modulation factor)
+    f_mod <- pmax(0, pmin(1, (freq - 500) / 2500))
+    
+    # For loud inputs (>65): reduce CR toward linear for severe losses (>65 dB HL)
+    cr_loud <- pmax(1.0, cr_base - (pmax(0, htl_sn - 65) / 30) * (1.5 - 0.5 * f_mod))
+    
+    # Determine the input level difference from the 65 dB anchor
+    # Compare current speech spectrum to the stored reference speech at 65 dB
+    if (!is.null(prescription$speech) && length(prescription$speech) == length(prescription$freq)) {
+      speech_ref <- approx(x = log10(prescription$freq), y = prescription$speech, 
+                           xout = log10(freq), rule = 2)$y
+      level_diff <- mean(speech - speech_ref, na.rm = TRUE)
+    } else {
+      level_diff <- 0  # No reference available, assume 65 dB
+    }
+    
+    if (abs(level_diff) > 1) {
+      # Apply WDRC: gain changes by (1/CR - 1) per dB of input change
+      # For soft inputs: use cr_base (more compression = more gain for soft)
+      # For loud inputs: use cr_loud (reduced CR for severe losses)
+      if (level_diff < 0) {
+        cr_use <- cr_base
+      } else {
+        cr_use <- cr_loud
+      }
+      gain <- gain_65 + level_diff * (1 / cr_use - 1)
+      gain <- pmax(0, gain)
+    } else {
+      gain <- gain_65
+    }
+    
+    raw_output <- speech + gain
+    overshoot <- pmax(0, raw_output - mpo)
+    final_output <- pmin(raw_output, mpo) + (overshoot / 10.0)
+    gain <- pmax(final_output - speech, 0)
+  } else if (!is.null(prescription) && is.character(prescription) && prescription == "NAL-R") {
+    gain <- calculate_nalr_gain(freq, threshold)
+  } else if (!is.null(prescription) && is.character(prescription) && prescription == "Open-NL") {
+    gain <- calculate_open_nl_gain(freq = freq, threshold = threshold, input_level = speech, gender = gender, experience = experience, config = config, coupling = coupling, module = module, ldl = ldl, loss = loss, distortion_category = distortion_category, ...)
+  } else {
+    gain <- rep(0, length(speech))
+  }
+  
+  ## Save the unaided speech to return it for plotting
+  unaided_speech <- speech
+  
+  ## Apply gain to speech and external noise for aided calculation
+  speech <- speech + gain
+  # Only amplify external noise if explicitly provided, not the -50 internal default
+  has_explicit_noise <- !is.null(match.call()$noise)
+  if (has_explicit_noise) {
+    noise <- noise + gain
+  }
+
+  #########
+  ## Calcuate SII following ANSI/ASA S3.5-1997 (R2024) Section 4
   #########
   
   ## Setup: Create worksheet
@@ -202,10 +419,10 @@ sii <- function(
 
   #####
   ## Step 2: Equivalent speech E'i, noise N'i, and hearing threshold
-  ##         T'i spectra
+  ##         T'i spectra. (ANSI S3.5: E'i and N'i are decreased by conductive loss Ji)
   #####
-  sii.tab$"E'i" <- speech
-  sii.tab$"N'i" <- noise
+  sii.tab$"E'i" <- speech - loss
+  sii.tab$"N'i" <- noise - loss
   sii.tab$"T'i" <- threshold
   sii.tab$"Ji"  <- loss
 
@@ -306,7 +523,9 @@ sii <- function(
   sii.tab$"Xi" <- table$"Xi"
   
   ## Calculate  X'i
-  sii.tab$"X'i" <- sii.tab$"Xi" + sii.tab$"T'i" 
+  ## Conductive loss (Ji) acts as a pre-cochlear attenuator and does NOT elevate
+  ## internal cochlear noise. Only the sensorineural component contributes to Xi.
+  sii.tab$"X'i" <- sii.tab$"Xi" + pmax(0, sii.tab$"T'i" - sii.tab$"Ji")
 
   #####
   ## Step 5: Equivalent disturbance spectrum, Di
@@ -327,14 +546,49 @@ sii <- function(
       x[x > 1] <- 1  # max is 1
       x
     }
-  ## Formula A1, which extends formula 11 to handle conductive
-  ## hearing loss (Ji)
-  sii.tab$"Li" <- 1 - (sii.tab$"E'i" - sii.tab$"Ui" - 10 - sii.tab$"Ji" )/160 
-  sii.tab$"Li" <- enforce.range(sii.tab$"Li")
+  if (nal_ldf) {
+    # NAL-NL2 modifies the LDF onset based on the degree of hearing loss
+    # Impaired ears tolerate higher presentation levels without losing intelligibility.
+    # We shift the penalty onset by 0.5 * sensorineural threshold. 
+    # Conductive losses act as pre-cochlear attenuators and are already subtracted from E'i.
+    sii.tab$"Li" <- 1 - (sii.tab$"E'i" - sii.tab$"Ui" - 10 - (0.5 * pmax(0, sii.tab$"T'i" - sii.tab$"Ji")))/160
+    sii.tab$"Li" <- enforce.range(sii.tab$"Li")
+  } else {
+    sii.tab$"Li" <- 1 - (sii.tab$"E'i" - sii.tab$"Ui" - 10)/160 
+    sii.tab$"Li" <- enforce.range(sii.tab$"Li")
+  }
   
   ## Step 7: Calculate Ki
   sii.tab$"Ki" <- (sii.tab$"E'i" - sii.tab$"Di" + 15)/30
   sii.tab$"Ki" <- enforce.range( sii.tab$"Ki" )
+  
+  if (desensitization == "johnson2011_smoothed" || desensitization == "johnson2011_complete") {
+    # Apply Hearing Loss Desensitization (Johnson & Dillon 2011 / Ching et al. 1998)
+    # Use sensorineural threshold only: conductive loss (Ji) does not cause
+    # cochlear desensitization, only sensorineural loss does.
+    T_hl <- pmax(0, sii.tab$"T'i" - sii.tab$"Ji")
+    
+    # Calculate m and p variables based on frequency-specific hearing loss (T)
+    m <- 1 / (1 + exp(0.075 * (T_hl - 66)))
+    p <- (T_hl / 8) - 15
+    
+    # Prevent division by exactly zero for mathematical safety
+    p[p == 0] <- -1e-6
+    
+    if (desensitization == "johnson2011_smoothed") {
+      # Apply desensitization to the audibility index (Ki)
+      # Using a linear multiplier instead of a hard asymptotic cap allows the numerical 
+      # optimizer (L-BFGS-B) to maintain a non-zero gradient while still penalizing dead regions.
+      sii.tab$"Ki" <- sii.tab$"Ki" * m
+    } else if (desensitization == "johnson2011_complete") {
+      # Apply the full asymptotic formula: k' = [(k/30)^p + m^p]^(1/p)
+      # Bounding Ki prevents 0^negative = Inf errors.
+      Ki_safe <- pmax(sii.tab$"Ki", 1e-10)
+      sii.tab$"Ki" <- ( (Ki_safe)^p + (m)^p ) ^ (1/p)
+    }
+    
+    sii.tab$"Ki" <- enforce.range(sii.tab$"Ki")
+  }
   
   ##         Calculate Ai
   sii.tab$"Ai" <- sii.tab$"Li" * sii.tab$"Ki"
@@ -347,18 +601,233 @@ sii <- function(
   
   ##         Sum IiAi to determine SII
   sii.val <- sum(sii.tab[,"IiAi"])  
+  
+  if (!is.null(prescription)) {
+     # Calculate the unaided SII for comparison using a recursive call
+     orig_noise <- noise
+     if (has_explicit_noise) orig_noise <- noise - gain
+     
+     unaided_obj <- sii(speech = unaided_speech, noise = orig_noise, threshold = threshold, 
+                        loss = loss, freq = freq, method = method, importance = importance, 
+                        interpolate = FALSE, desensitization = desensitization)
+     retval$unaided_sii <- unaided_obj$sii
+  }
 
   ## Package it all up to return to the user
   retval$speech    <- speech
+  retval$unaided_speech <- unaided_speech
+  retval$vocal_effort <- vocal_effort
   retval$noise     <- noise
   retval$threshold <- threshold
   retval$loss      <- loss
   retval$freq      <- freq
+  retval$gain      <- gain
+  retval$mpo       <- mpo
+  retval$prescription <- prescription
+  # Store a display-friendly name for plotting labels
+  if (is.null(prescription)) {
+    retval$prescription_name <- "Unaided"
+  } else if (is.character(prescription)) {
+    retval$prescription_name <- prescription
+  } else if (inherits(prescription, "prescription_target")) {
+    retval$prescription_name <- "Open-NL"
+  } else {
+    retval$prescription_name <- "Custom"
+  }
   retval$method    <- method
   retval$table     <- sii.tab
   retval$sii       <- sii.val
+  retval$desensitization <- desensitization
+  retval$module    <- module
+  retval$measured_wrs <- measured_wrs
+  retval$predicted_wrs <- predicted_wrs
+  retval$distortion_category <- distortion_category
   
   class(retval) <- "SII"
   
   retval
+}
+
+#' Calculate Psychoacoustic Loudness (Sones)
+#'
+#' @description
+#' Calculates the total perceived loudness in Sones based on the specific
+#' speech spectrum and hearing thresholds of the patient.
+#' 
+#' @details
+#' The current implementation uses a first-order heuristic model of recruitment 
+#' based on Stevens' Power Law, mapped over an estimated dynamic range. While it
+#' is computationally fast and demonstrates the restoration of loudness conceptually,
+#' it is not a full psychoacoustic model (like Moore-Glasberg / CAM2Q), as it does
+#' not calculate basilar membrane excitation patterns via RoEx filters.
+#'
+#' \strong{Mathematical Formula:}
+#' 
+#' 1. \strong{Uncomfortable Loudness Level (UCL)} is predicted from the threshold ($T_i$):
+#' \deqn{UCL_i = 100 + 0.25 \times \max(0, T_i - 20)}
+#'
+#' 2. \strong{Dynamic Range (DR)}:
+#' \deqn{DR_i = \max(1, UCL_i - T_i)}
+#' 
+#' 3. \strong{Sensation Level (SL)} of speech peaks (RMS + 15 dB):
+#' \deqn{SL_i = \max(0, E_i + 15 - T_i)}
+#' 
+#' 4. \strong{Loudness Level (Phons)} modeling recruitment:
+#' \deqn{Phons_i = \left( \frac{SL_i}{DR_i} \right) \times 100}
+#' 
+#' 5. \strong{Specific Loudness (Sones)} per band via Stevens' Power Law:
+#' \deqn{Sones_i = 2^{\frac{Phons_i - 40}{10}} \quad \text{for } Phons_i \ge 40}
+#' \deqn{Sones_i = \left(\frac{Phons_i}{40}\right)^{2.5} \quad \text{for } Phons_i < 40}
+#' 
+#' 6. \strong{Total Loudness (Sones)}:
+#' \deqn{Sones_{Total} = \sum Sones_i \times \text{calibration\_factor}}
+#' 
+#' The calibration factor (0.25 for 21 critical bands) is scaled dynamically based on the number of frequency bands
+#' used in the underlying SII method (e.g., 21 for critical, 6 for octave) to ensure
+#' equivalent loudness summation across different resolutions.
+#' 
+#' @param x An object of class \code{SII}.
+#' @return A numeric value representing the total loudness in Sones.
+# Internal helper to calculate monaural specific loudness per critical band
+get_specific_loudness <- function(x) {
+  if (!inherits(x, "SII")) {
+    stop("Input must be an object of class 'SII'")
+  }
+  
+  # Aided Equivalent Speech Spectrum Level (E'i) and Threshold (T'i)
+  E_prime <- x$table[, "E'i"]
+  X_prime <- x$table[, "X'i"]
+  
+  return(list(E_prime = E_prime, X_prime = X_prime))
+}
+
+calculate_loudness <- function(x, ohc_proportion = 0.65) {
+  if (is.null(x$gain)) {
+    return(NA) # Cannot compute loudness without aided gain
+  }
+  
+  # Ensure we extract the correct gain and thresholds at standard audiometric frequencies
+  hl_freqs <- c(250, 500, 1000, 2000, 4000, 8000)
+  
+  # Interpolate the required parameters to the 6 standard frequencies
+  gain_tgt <- approx(x = log10(x$freq), y = x$gain, xout = log10(hl_freqs), rule=2)$y
+  threshold <- approx(x = log10(x$freq), y = x$threshold, xout = log10(hl_freqs), rule=2)$y
+  loss <- if (!is.null(x$loss)) approx(x = log10(x$freq), y = x$loss, xout = log10(hl_freqs), rule=2)$y else rep(0, 6)
+  
+  # Determine the target speech level
+  target_level <- as.numeric(gsub(" dB SPL", "", x$vocal_effort))
+  if (is.na(target_level) || length(target_level) == 0) {
+    target_level <- 65
+  }
+  
+  # LTASS PSD Bandwidth Normalization for Bramslow2004
+  # This mirrors the pipeline in generate_open_nl_metrics.R perfectly.
+  ltass_65  <- c(37.4, 36.92, 27.66, 19.97, 11.98, 3.78)
+  input_speech <- ltass_65 + (target_level - 65)
+  aided_spl    <- input_speech + gain_tgt - loss
+
+  # Step 1: Dense 10 Hz grid
+  dense_f <- seq(10, 23990, by = 10)
+  
+  # Convert 1/3-octave band levels to spectrum density (dB/Hz) before interpolating to 10 Hz grid
+  # A 1/3-octave band has bandwidth ~ 0.23 * fc
+  
+  dense_l <- approx(log10(hl_freqs), aided_spl, log10(dense_f), rule = 2)$y
+
+  dense_l[dense_f < hl_freqs[1]] <- aided_spl[1] - 24 * log2(hl_freqs[1] / dense_f[dense_f < hl_freqs[1]])
+  dense_l[dense_f > hl_freqs[6]] <- aided_spl[6] - 24 * log2(dense_f[dense_f > hl_freqs[6]] / hl_freqs[6])
+
+  # Step 3: OHC/IHC split of sensorineural loss
+  sn_loss  <- pmax(threshold - loss, 0)
+  ohc_loss <- pmin(sn_loss, 65)
+  ihc_loss <- pmax(sn_loss - 65, 0)
+  
+  res <- tryCatch({
+    calculate_loudness_cpp(
+      inputF = dense_f, 
+      inputLdB = dense_l,
+      HLcf = hl_freqs, 
+      HLohcdB0 = ohc_loss, 
+      HLihcdB0 = ihc_loss
+    )
+  }, error = function(e) NULL)
+  
+  if (is.null(res)) return(NA)
+  
+  # Return both total loudness (Ldn), specific loudness array (N_prime), and excitation (E)
+  return(list(total = res$Ldn, specific = res$N_prime, freq = res$CF, E = res$E, Cam = res$Cam))
+}
+
+#' Calculate Psychoacoustic Binaural Loudness (Sones)
+#'
+#' @description
+#' Calculates the total perceived binaural loudness based on the Pieper et al. (2021) 
+#' and Moore et al. (2016) binaural summation models.
+#' 
+#' @param x_left An object of class `SII` for the left ear.
+#' @param x_right Optional. An object of class `SII` for the right ear. If NULL, assumes a perfectly symmetric bilateral fitting (`x_left == x_right`).
+#' @param alpha_b Numeric. The binaural inhibition factor. Default is -0.25, reflecting classical normal-hearing binaural inhibition.
+#' @return A numeric value representing the total binaural loudness in Sones.
+#' @export
+calculate_binaural_loudness <- function(x_left, x_right = NULL, alpha_b = -0.25) {
+  l_left_res <- calculate_loudness(x_left)
+  l_left <- if (is.list(l_left_res)) l_left_res$total else l_left_res
+  
+  if (is.null(x_right)) {
+    l_right <- l_left
+  } else {
+    l_right_res <- calculate_loudness(x_right)
+    l_right <- if (is.list(l_right_res)) l_right_res$total else l_right_res
+  }
+  
+  # Pieper et al. (2021) / Moore et al. (2016) binaural inhibition heuristic
+  l_bin <- l_left + l_right + alpha_b * sqrt(l_left * l_right)
+  return(max(0, l_bin))
+}
+#' Export prescribed insertion gains for 50, 65, and 80 dB SPL input levels
+#'
+#' @param x An object of class `SII`
+#' @return A data.frame containing frequency and the prescribed insertion gains
+#' @export
+export_gains <- function(x) {
+  if (is.null(x$prescription)) {
+    return(data.frame(Frequency = x$freq, Gain_50 = NA, Gain_65 = NA, Gain_80 = NA))
+  }
+  
+  n_bands <- length(x$freq)
+  method_name <- if (n_bands == 21) "critical" else 
+                 if (n_bands == 18) "one-third octave" else 
+                 if (n_bands == 17) "equal-contributing" else "octave"
+  data_name <- if (n_bands == 21) "critical" else 
+               if (n_bands == 18) "onethird" else 
+               if (n_bands == 17) "equal" else "octave"
+  
+  local_env <- new.env()
+  if (file.exists(file.path("data", paste0(data_name, ".rda")))) {
+    load(file.path("data", paste0(data_name, ".rda")), envir=local_env)
+  } else {
+    data(list = data_name, package = "SII", envir = local_env)
+  }
+  tbl <- get(data_name, envir = local_env)
+  
+  if ("hi" %in% names(tbl) && "li" %in% names(tbl)) {
+    overall_normal <- 10 * log10(sum((10^(tbl$normal / 10)) * (tbl$hi - tbl$li), na.rm = TRUE))
+  } else {
+    overall_normal <- 62.35
+  }
+  
+  desens <- if (!is.null(x$desensitization)) x$desensitization else FALSE
+  unaided_noise <- x$noise - x$gain
+  
+  res50 <- sii(speech = tbl$normal + (50 - overall_normal), noise = unaided_noise, threshold = x$threshold, loss = x$loss, freq = tbl$fi, method = method_name, prescription = x$prescription, desensitization = desens, experience = x$experience, gender = x$gender, config = x$config, coupling = x$coupling, module = x$module, distortion_category = x$distortion_category)
+  res65 <- sii(speech = tbl$normal + (65 - overall_normal), noise = unaided_noise, threshold = x$threshold, loss = x$loss, freq = tbl$fi, method = method_name, prescription = x$prescription, desensitization = desens, experience = x$experience, gender = x$gender, config = x$config, coupling = x$coupling, module = x$module, distortion_category = x$distortion_category)
+  res80 <- sii(speech = tbl$normal + (80 - overall_normal), noise = unaided_noise, threshold = x$threshold, loss = x$loss, freq = tbl$fi, method = method_name, prescription = x$prescription, desensitization = desens, experience = x$experience, gender = x$gender, config = x$config, coupling = x$coupling, module = x$module, distortion_category = x$distortion_category)
+  
+  data.frame(
+    Frequency = x$freq,
+    Gain_50 = round(res50$gain, 2),
+    Gain_65 = round(res65$gain, 2),
+    Gain_80 = round(res80$gain, 2),
+    MPO = round(res65$mpo, 2)
+  )
 }
