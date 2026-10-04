@@ -31,7 +31,7 @@ calculate_nalr_gain <- function(freq, threshold) {
   return(ig)
 }
 
-calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male", experience = "experienced", config = "bilateral", age = "adult", coupling = "custom_occluded", module = "standard", ldl = NULL, age_years = NULL, age_months = NULL, loss = NULL, distortion_category = NULL, f_e_hf = NULL, f_e_lf = NULL, abg_fraction = 0.75, ...) {
+calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male", experience = "experienced", config = "bilateral", age = "adult", coupling = "custom_occluded", module = "standard", ldl = NULL, age_years = NULL, age_months = NULL, loss = NULL, distortion_category = NULL, f_e_hf = NULL, f_e_lf = NULL, abg_fraction = 0.75, enable_severe_booster = FALSE, booster_onset = 70, ...) {
 
   dots <- list(...)
   anchor <- if (!is.null(dots$anchor)) dots$anchor else 0.46
@@ -88,10 +88,7 @@ calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male"
   # Standard experienced user baseline (from manuscript)
   c_vals <- c(-8, -1, 3, 1, 0, 0, 0, 0)
   
-  if (experience == "new") {
-    # New Users receive a purely nominal, uncalibrated flat -3 dB reduction
-    c_vals <- c_vals - 3
-  } else if (experience == "power") {
+  if (experience == "power") {
     # Power Users (not defined in manuscript, but present in UI) get +3 dB
     c_vals <- c_vals + 3
   }
@@ -139,7 +136,7 @@ calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male"
   
   disable_sdlfp <- if (!is.null(dots$disable_sdlfp)) dots$disable_sdlfp else FALSE
   if (steep_slope_diff > slope_trigger && !disable_sdlfp) {
-    # Profound High-Frequency Bypass (PF_bypass) - Eq. 3
+    # Profound High-Frequency Bypass (PF_active) - Eq. 3
     # If high frequencies are extremely severe (>70 dB HL), we bypass the low frequency penalty 
     # so they can still hear low frequency cues.
     pf_bypass <- pmax(0, pmin(1, (95 - high_thresh_mean) / 25))
@@ -164,8 +161,9 @@ calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male"
   # Bounded severe-loss booster (slope = 0.15) applied to thresholds.
   # The manuscript defaults to off, but Eq. 1 uses the 60 dB HL aggressive onset.
   # We apply the 0.15 slope and remove the undocumented tapers (dead region & mid-taper).
-  b_en <- 1.0 # Set to 1.0 to enable the aggressive ablation mode from Eq. 1
-  slb_final <- b_en * 0.15 * pmax(0, pmin(80, sn_threshold) - 60)
+  b_en <- if (enable_severe_booster) 1.0 else 0.0
+  actual_onset <- if (enable_severe_booster) 60 else 70 # As per manuscript text
+  slb_final <- b_en * 0.15 * pmax(0, pmin(80, sn_threshold) - actual_onset)
   
   g_65 <- g_65 + slb_final
   
@@ -347,16 +345,6 @@ calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male"
     }
   }
   
-  # 3.8 Comfort in Noise (CIN) Module
-  if (module == "cin") {
-    # Comfort in Noise (CIN) module aims to reduce loudness and improve comfort
-    # in high-level noise environments. Based on evidence, listeners prefer
-    # less compression (linear or 1.5:1) when noise exceeds the compression threshold.
-    cr_loud <- pmin(cr_loud, 1.5)
-    
-    # We lower the WDRC pivot / CT so compression kicks in earlier.
-    ct_band <- ct_band - 10
-  }
   
   # The target gain 'g_65' is prescribed for an input level of 'pivot'.
   # If CT > pivot, the pivot is in the linear region, so the linear gain is simply g_65.
@@ -404,7 +392,9 @@ calculate_open_nl_gain <- function(freq, threshold, input_level, gender = "male"
   # Simulated Real-Ear Aided Response (REAR) by subtracting leakage.
   if (coupling != "custom_occluded") {
     ve_freqs <- c(250, 500, 1000, 2000, 4000, 8000)
-    if (coupling == "open_dome") {
+    if (coupling == "bte_13") {
+      ve_loss <- c(0, 0, 0, -1, -5, -15)
+    } else if (coupling == "open_dome") {
       ve_loss <- c(-35, -28, -15, -2, 0, 0)
     } else if (coupling == "tulip_dome") {
       ve_loss <- c(-25, -18, -5, 0, 0, 0)
@@ -509,7 +499,7 @@ calculate_nal_sspl90 <- function(threshold, gain, ldl = NULL, age = "adult", age
 #'
 #' @param freq A numeric vector of frequencies.
 #' @param threshold A numeric vector of hearing thresholds.
-#' @param module The operating module ("standard", "cin", "mhl").
+#' @param module The operating module ("standard", "mhl").
 #' @return A list containing compression recommendations.
 #' @export
 prescribe_compression <- function(freq, threshold, module = "standard") {
@@ -533,9 +523,6 @@ prescribe_compression <- function(freq, threshold, module = "standard") {
   }
   
   ratio_note <- "Target \u2264 2:1. If CR \u2265 3:1 is necessary, use longer release time (e.g., 1000 ms) to preserve clarity."
-  if (module == "cin") {
-    ratio_note <- "Comfort in Noise (CIN): Prescribing lower compression (linear to 1.5:1) for high-level noise."
-  }
   
   return(list(
     pta4 = pta4,
